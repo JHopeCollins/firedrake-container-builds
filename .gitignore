@@ -1,0 +1,8 @@
+# ignore everything
+*
+*/
+
+# except dockerfiles and bash scripts
+!dockerfile*
+!*.sh
+!.gitignore
