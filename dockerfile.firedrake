@@ -43,6 +43,10 @@ RUN bash -c 'python3 firedrake-install \
     --package-branch firedrake ${FIREDRAKE_BRANCH} \
     ${FIREDRAKE_EXTRA_ARGS}'
 
+# Print out the version details for Firedrake and packages
+RUN bash -c '. /home/firedrake/firedrake/bin/activate; \
+   firedake-status'
+
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
 RUN bash -c '. /home/firedrake/firedrake/bin/activate; \

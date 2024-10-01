@@ -2,8 +2,13 @@
 set -x
 
 NONROOT_USER=joshua
-FIREDRAKE_NAME=firedrake-archer2-gusto
-PETSC_NAME=petsc-env
+FIREDRAKE_NAME=firedrake-archer2-ch4ofi
+PETSC_NAME=petsc-env-ch4ofi
+
+### TRY WITH ARCHER2 RECOMMENDED DEVICE ###
+#   --build-arg MPICH_DOWNLOAD_DEVICE=ch4:ofi \
+## instead of
+#   --build-arg MPICH_DOWNLOAD_DEVICE=ch3:nemesis \
 
 time docker build \
    --no-cache \
@@ -11,7 +16,7 @@ time docker build \
    --build-arg BUILD_MAKE_NP=30 \
    --build-arg BUILD_DEBUG=0 \
    --build-arg MPICH_DOWNLOAD_VERSION=3.4.3 \
-   --build-arg MPICH_DOWNLOAD_DEVICE=ch3:nemesis \
+   --build-arg MPICH_DOWNLOAD_DEVICE=ch4:ofi \
    --build-arg EXTRA_PACKAGES="" \
    --build-arg PETSC_EXTRA_ARGS="" \
    --build-arg PETSC_SCALAR_TYPE="real" \
@@ -19,11 +24,11 @@ time docker build \
    --file=dockerfile.petsc-env emptydir \
    | tee build-logs/${PETSC_NAME}-docker-build.log
 
+
 time docker build \
    --no-cache \
    --build-arg FIREDRAKE_BRANCH="JDBetteridge/update_caching" \
-   --build-arg PETSC_CONTAINER=${PETSC_NAME} \
-   --build-arg FIREDRAKE_EXTRA_ARGS="--package-branch PyOP2 JDBetteridge/remove_comm_hash --install gusto" \
+   --build-arg FIREDRAKE_EXTRA_ARGS="--package-branch PyOP2 JDBetteridge/remove_comm_hash --pip-install siphash24" \
    --tag=${FIREDRAKE_NAME} \
    --file=dockerfile.firedrake emptydir \
    | tee build-logs/${FIREDRAKE_NAME}-docker-build.log
