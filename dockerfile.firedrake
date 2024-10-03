@@ -1,7 +1,8 @@
 # DockerFile for a plain Firedrake suitable for testing Firedrake components and applications
 
-ARG PETSC_CONTAINER=petsc-env
+ARG PETSC_CONTAINER=petsc:latest
 FROM ${PETSC_CONTAINER}
+ARG PETSC_CONTAINER
 
 # What is this container?
 LABEL name="firedrake", \
@@ -45,7 +46,7 @@ RUN bash -c 'python3 firedrake-install \
 
 # Print out the version details for Firedrake and packages
 RUN bash -c '. /home/firedrake/firedrake/bin/activate; \
-   firedake-status'
+   firedrake-status'
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 

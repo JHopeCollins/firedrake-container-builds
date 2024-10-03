@@ -2,13 +2,16 @@
 set -x
 
 NONROOT_USER=joshua
-FIREDRAKE_NAME=firedrake-archer2-ch4ofi
-PETSC_NAME=petsc-env-ch4ofi
+FIREDRAKE_TAG=archer2-ch4ofi
+PETSC_TAG=archer2-ch4ofi
 
-### TRY WITH ARCHER2 RECOMMENDED DEVICE ###
-#   --build-arg MPICH_DOWNLOAD_DEVICE=ch4:ofi \
-## instead of
-#   --build-arg MPICH_DOWNLOAD_DEVICE=ch3:nemesis \
+# docker containers is name:tag format
+PETSC_CONTAINER=petsc:${PETSC_TAG}
+FIREDRAKE_CONTAINER=firedrake:${FIREDRAKE_TAG}
+
+# strings we can use for files without ":"
+PETSC_STR=petsc-${PETSC_TAG}
+FIREDRAKE_STR=firedrake-${FIREDRAKE_TAG}
 
 time docker build \
    --no-cache \
@@ -20,28 +23,30 @@ time docker build \
    --build-arg EXTRA_PACKAGES="" \
    --build-arg PETSC_EXTRA_ARGS="" \
    --build-arg PETSC_SCALAR_TYPE="real" \
-   --tag=${PETSC_NAME} \
+   --tag=petsc:latest \
+   --tag=${PETSC_CONTAINER} \
    --file=dockerfile.petsc-env emptydir \
-   | tee build-logs/${PETSC_NAME}-docker-build.log
-
+   | tee build-logs/${PETSC_STR}_docker-build.log
 
 time docker build \
    --no-cache \
    --build-arg FIREDRAKE_BRANCH="JDBetteridge/update_caching" \
    --build-arg FIREDRAKE_EXTRA_ARGS="--package-branch PyOP2 JDBetteridge/remove_comm_hash --pip-install siphash24" \
-   --tag=${FIREDRAKE_NAME} \
+   --build-arg PETSC_CONTAINER=${PETSC_CONTAINER} \
+   --tag=firedrake:latest \
+   --tag=${FIREDRAKE_CONTAINER} \
    --file=dockerfile.firedrake emptydir \
-   | tee build-logs/${FIREDRAKE_NAME}-docker-build.log
+   | tee build-logs/${FIREDRAKE_STR}_docker-build.log
 
 time singularity build --force \
-   --sandbox ./${FIREDRAKE_NAME}-singularity \
-   docker-daemon://${FIREDRAKE_NAME}:latest \
-   | tee build-logs/${FIREDRAKE_NAME}-singularity-sandbox-build.log
+   --sandbox ./${FIREDRAKE_STR}_singularity \
+   docker-daemon://${FIREDRAKE_CONTAINER} \
+   | tee build-logs/${FIREDRAKE_STR}_singularity-sandbox-build.log
 
 time singularity build --force \
-   ${FIREDRAKE_NAME}.sif \
-   ./${FIREDRAKE_NAME}-singularity \
-   | tee build-logs/${FIREDRAKE_NAME}-singularity-image-build.log
+   ${FIREDRAKE_STR}.sif \
+   ./${FIREDRAKE_STR}_singularity \
+   | tee build-logs/${FIREDRAKE_STR}_singularity-image-build.log
 
 # this script must be run as root so the log files are root owned unless we do this
 chown -R ${NONROOT_USER}:${NONROOT_USER} build-logs/
