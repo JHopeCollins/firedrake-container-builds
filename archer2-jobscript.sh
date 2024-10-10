@@ -2,15 +2,15 @@
 #
 #SBATCH --account=e781
 #SBATCH --partition=standard
-#SBATCH --qos=standard
+#SBATCH --qos=short
+#####SBATCH --array=2-8
 
-#SBATCH --job-name=baroclinic_wave_nc6_nl4_dt100_tm008_p1
-
-#SBATCH --output=results/slurm-%x-%j.out
-#SBATCH --error=results/slurm-%x-%j.out
+#SBATCH --job-name=lswe_ref4_nt00002_dt025
+#SBATCH --output=results/tests/slurm-%x-%j.out
+#SBATCH --error=results/tests/slurm-%x-%j.out
 #
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=1
+#SBATCH --ntasks-per-node=2
 ####SBATCH --switches=1
 #
 #SBATCH --distribution=block:block
@@ -20,7 +20,7 @@
 #SBATCH --exclusive
 #SBATCH --requeue
 #
-#SBATCH --time 01:30:00
+#SBATCH --time 00:10:00
 #SBATCH --mail-type=ALL
 
 # print commands
@@ -31,29 +31,27 @@ set -x
 ### === ---
 
 JOBCODE=${SLURM_JOB_NAME}-${SLURM_JOB_ID}
-JOBDIR=results/${JOBCODE}
+JOBDIR=results/tests/${JOBCODE}
 mkdir -p ${JOBDIR}
-
-ERRLOG=${JOBDIR}/err-${JOBCODE}.log
 
 # jobscript.sh must be submitted from the top level asQ/ directory
 
 ### --- scripts
 
-export GUSTO_LOG_LEVEL="DEBUG"
-export GUSTO_PARALLEL_LOG="FILE"
-
-python_script="dry_baroclinic_sphere.py"
-script_args="--ncell_per_edge=6 --nlayers=4 --dt=100 --tmax=300 --dumpfreq=10 --dirname=${JOBDIR}"
-# Ulrich 2014 resolution
-# script_args="--ncell_per_edge=30 --nlayers=10 --dt=1200 --tmax=864000 --dumpfreq=10 --dirname=${JOBDIR}"
+python_script="linear_gravity_bumps.py"
+script_dir="case_studies/shallow_water"
+script_args="--ref_level=4 --dt=0.25 --slice_length=1 --nslices=2"
 
 ### --- script arguments which are used by multiple scripts
 # e.g. output directories
 
 flamelog_file="${JOBDIR}/flamelog-${JOBCODE}.txt"
 
-extra_script_args="--show_args -log_view :${flamelog_file}:ascii_flamegraph -options_left 0"
+script_extra_args="--show_args --metrics_dir ${JOBDIR} -log_view :${flamelog_file}:ascii_flamegraph -options_left 0"
+
+### --- python arguments
+# e.g. -Wignore, -u
+python_extra_args=""
 
 ### --- srun configuration
 
@@ -61,10 +59,12 @@ extra_script_args="--show_args -log_view :${flamelog_file}:ascii_flamegraph -opt
 l3cores=2
 
 # any extra arguments to srun
-srun_args=""
+srun_extra_args=""
 
-# Change this to select e.g. real or complex firedrake containers
-singularity_container="$SIFDIR/firedrake-archer2-gusto.sif"
+### --- singularity configuration
+
+singularity_container="firedrake-archer2.sif"
+singularity_extra_args=""
 
 ### === --- You should not need to change anything below this line in most cases --- === ###
 
@@ -74,7 +74,6 @@ singularity_container="$SIFDIR/firedrake-archer2-gusto.sif"
 
 # where are the singularity files?
 export SIFDIR="/work/e781/shared/firedrake-singularity"
-singularity_container_path="${SIFDIR}/${singularity_container}"
 
 # L3 cache is the lowest level of shared memory, with 4 cores per cache
 # and 32 L3 caches per node. Using fewer than 4 cores/L3 cache may improve
@@ -85,13 +84,17 @@ l3size=4
 cpu_map=$(python3 -c "print(','.join(map(str,filter(lambda i: i%${l3size}<${l3cores}, range(${nodesize})))))")
 
 # cpu mapping for L3 cache usage and make sure we do not use any shared memory/hyperthreading
-default_srun_args="--hint=nomultithread --cpu_bind=map_cpu:${cpu_map}"
+srun_args="--hint=nomultithread --cpu_bind=map_cpu:${cpu_map} ${srun_extra_args}"
 
 # mount the current directory with read-write access in the container
-singularity_args="--bind $PWD:/home/firedrake/work --home $PWD"
+singularity_args="--home $PWD:/home/firedrake/work ${singularity_extra_args}"
 
-# use the container python
-python_cmd="/home/firedrake/firedrake/bin/python"
+# concatenate python arguments
+script_args="${script_extra_args} ${script_args}"
+
+# full python arguments. Just the user provided ones but this means
+# we can easily add defaults later.
+python_args="${python_extra_args}"
 
 ### === ---
 ### === --- Some job info for debugging --- === ###
@@ -125,6 +128,7 @@ echo -e "\n"
 # set up the modules and environment
 set -x
 source $SIFDIR/singularity_setup.sh
+set -x
 
 # module load craype-network-ucx
 # module load cray-mpich-ucx
@@ -138,25 +142,38 @@ set +x
 echo module load xthi
 module load xthi
 set -x
-srun $default_srun_args $srun_args xthi > ${JOBDIR}/xthi.log 2>&1
+srun $srun_args xthi > ${JOBDIR}/xthi.log 2>&1
 unset MPICH_ENV_DISPLAY
+
+### === ---
+### === --- Copy files to nodes --- === ###
+### === ---
+
+set +x
+echo -e "Start copying files to nodes: " `date`
+echo -e "\n"
+set -x
+
+tmp_script=${JOBCODE}-${python_script}
+
+# save script to job directory
+cp $script_dir/$python_script ${JOBDIR}/${tmp_script}
+cp $script_dir/$python_script ./${tmp_script}
+
+sbcast --compress=none ${SIFDIR}/$singularity_container /tmp/${singularity_container}
 
 ### === ---
 ### === --- Run the script --- === ###
 ### === ---
-
-tmp_script="${JOBCODE}.py"
-
-cp $python_script ./$tmp_script
 
 set +x
 echo -e "Script start time: " `date`
 echo -e "\n"
 
 set -x
-srun $default_srun_args $srun_args \
-   singularity run $singularity_args $singularity_container_path \
-   $python_cmd -Wignore ./$tmp_script $extra_script_args $script_args
+srun $srun_args \
+   singularity run $singularity_args /tmp/$singularity_container \
+   python ${python_args} ./$tmp_script $script_args
 
 rm ./$tmp_script
 
