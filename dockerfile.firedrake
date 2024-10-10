@@ -1,12 +1,15 @@
-# DockerFile for a plain Firedrake suitable for testing Firedrake components and applications
+# DockerFile for a custom Firedrake build
 
 ARG PETSC_CONTAINER=petsc:latest
 FROM ${PETSC_CONTAINER}
 ARG PETSC_CONTAINER
 
+USER firedrake
+WORKDIR /home/firedrake
+
 # What is this container?
 LABEL name="firedrake", \
-      description="A minimal Firedrake installation"
+      description="A Firedrake installation"
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
@@ -16,19 +19,21 @@ LABEL name="firedrake", \
 # install script.
 ARG FIREDRAKE_BRANCH=master
 
-# Any extra arguments for firedrake-install
+# Any extra arguments for firedrake-install,
+# e.g. --install gusto, --no-vtk etc.
 ARG FIREDRAKE_EXTRA_ARGS=""
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
+# Store some info so we can check how we built later
 LABEL petsc.container=${PETSC_CONTAINER} \
       firedrake.branch=${FIREDRAKE_BRANCH} \
       firedrake.extra-args=${FIREDRAKE_EXTRA_ARGS}
 
-USER firedrake
-WORKDIR /home/firedrake
-
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+# Install Firedrake ASAP so we can change anything else below and
+# rebuild with the docker cache without having to reinstall firedrake.
 
 # Copy the firedrake-install from the correct branch
 RUN curl -O https://raw.githubusercontent.com/firedrakeproject/firedrake/${FIREDRAKE_BRANCH}/scripts/firedrake-install
@@ -44,16 +49,99 @@ RUN bash -c 'python3 firedrake-install \
     --package-branch firedrake ${FIREDRAKE_BRANCH} \
     ${FIREDRAKE_EXTRA_ARGS}'
 
+# Remove the pip cache to save some space
+RUN bash -c '. /home/firedrake/firedrake/bin/activate; \
+   /home/firedrake/firedrake/bin/python -m pip cache purge'
+
 # Print out the version details for Firedrake and packages
 RUN bash -c '. /home/firedrake/firedrake/bin/activate; \
    firedrake-status'
 
 # # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
 
-RUN bash -c '. /home/firedrake/firedrake/bin/activate; \
-   cd /home/firedrake/firedrake/src/firedrake/; \
-   python -m pytest -v tests/regression/ \
-   -k "poisson_strong or stokes_mini or dg_advection"'
+# make sure we know where compilers are even if the venv isn't active
+ENV PYOP2_CC=/home/firedrake/firedrake/bin/mpicc
+ENV PYOP2_CXX=/home/firedrake/firedrake/bin/mpicxx
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+# stop PETSc complaining at any argument it doesn't recognise
+RUN bash -c 'echo "-options_left 0" >> /home/firedrake/.petscrc'
 
 RUN bash -c '. /home/firedrake/firedrake/bin/activate; \
+   cd /home/firedrake/firedrake/src/firedrake/; \
+   /home/firedrake/firedrake/bin/python -m pytest -v tests/regression/ \
+   -k "poisson_strong or stokes_mini or dg_advection"'
+
+# Tidy up caches etc generated during the tests
+RUN bash -c '. /home/firedrake/firedrake/bin/activate; \
    firedrake-clean'
+
+# # # # # # # # # # # # # # # # # # # # # # # # # # # # # #
+
+# The number of processors to use for the container MPI.
+ENV nprocs=0
+
+# TODO: Can this be tidied up with EOF?
+#       Can't do the shebang line but maybe the rest.
+RUN bash -c ' \
+   ENTRY_SCRIPT="/home/firedrake/entrypoint.sh"; \
+   echo "#!/bin/bash" > ${ENTRY_SCRIPT}; \
+   echo "set -e" >> ${ENTRY_SCRIPT}; \
+   echo "# Start the firedrake venv" >> ${ENTRY_SCRIPT}; \
+   echo ". /home/firedrake/firedrake/bin/activate" >> ${ENTRY_SCRIPT}; \
+   echo "" >> ${ENTRY_SCRIPT}; \
+   echo "# Set the cache directories if they are not set already" >> ${ENTRY_SCRIPT}; \
+   echo "if [ -z \${PYOP2_CACHE_DIR} ]; then" >> ${ENTRY_SCRIPT}; \
+   echo "   export PYOP2_CACHE_DIR=\${HOME}/.cache/pyop2" >> ${ENTRY_SCRIPT}; \
+   echo "fi" >> ${ENTRY_SCRIPT}; \
+   echo "if [ -z \${FIREDRAKE_TSFC_KERNEL_CACHE_DIR} ]; then" >> ${ENTRY_SCRIPT}; \
+   echo "   export FIREDRAKE_TSFC_KERNEL_CACHE_DIR=\${HOME}/.cache/tsfc" >> ${ENTRY_SCRIPT}; \
+   echo "fi" >> ${ENTRY_SCRIPT}; \
+   echo "" >> ${ENTRY_SCRIPT}; \
+   echo "# Run in parallel if nprocs is set" >> ${ENTRY_SCRIPT}; \
+   echo "if [ \${nprocs} -gt 0 ]; then" >> ${ENTRY_SCRIPT}; \
+   echo "   exec mpiexec -np \${nprocs} \"\$@\"" >> ${ENTRY_SCRIPT}; \
+   echo "else" >> ${ENTRY_SCRIPT}; \
+   echo "   exec \"\$@\"" >> ${ENTRY_SCRIPT}; \
+   echo "fi" >> ${ENTRY_SCRIPT}; \
+   chmod +x ${ENTRY_SCRIPT}'
+
+RUN bash -c ' \
+   ENTRY_SCRIPT="/home/firedrake/entrypoint.sh"; \
+   ls -lAFh ${ENTRY_SCRIPT}; \
+   cat ${ENTRY_SCRIPT}'
+
+# The custom entrypoint will intercept the commands passed to the container
+# so we can activate the firedrake venv and set cache directories before
+# running anything, and decide whether to run the command with MPI.
+#
+# To use the firedrake docker container to run a firedrake script:
+#
+# docker run -v $PWD/script.py:/home/firedrake/script.py python firedrake script.py
+#
+# To use the singularity container to run a firedrake script:
+#
+# singularity run --home $PWD firedrake.sif python script.py
+#
+# The container MPI can be used with N processors with docker or singularity with:
+#
+# docker run --env nprocs=N -v $PWD/script.py:/home/firedrake/script.py firedrake python script.py
+#
+# singularity run --env nprocs=N --home $PWD:/work firedrake.sif python script.py
+#
+# To run the singularity container with the vendor MPI nprocs MUST be 0.
+# Assuming the mpi command is mpiexec (but could be mpirun, srun, etc) and
+# the SINGULARITY_LD_LIBRARY_PATH and SINGULARITY_BIND environment variables
+# are set to the vendor libraries paths:
+#
+# mpiexec -np N singularity run --home $PWD:/work firedrake.sif python script.py
+#
+# The default cache directories are set to ${HOME}/.cache in the user's
+# home directory. If running docker then this will be a temporary directory
+# in /home/firedrake, but if running singularity with `--home <src>:<dst>`
+# then it will be wherever <dst> is in the container, and will be written back
+# to <src>. The cache directories can be specified manually by setting the
+# PYOP2_CACHE_DIR and FIREDRAKE_TSFC_KERNEL_CACHE_DIR environment variables.
+
+ENTRYPOINT ["/home/firedrake/entrypoint.sh"]
